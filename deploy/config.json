@@ -1,0 +1,12 @@
+{
+    "log":  {
+                "path":  "./logs",
+                "level":  "info",
+                "days":  7
+            },
+    "auth":  {
+                 "admin":  "ChangeMeChangeMe"
+             },
+    "salt":  "S4ZsOVYnBkX2o5a0",
+    "listen":  ":8000"
+}

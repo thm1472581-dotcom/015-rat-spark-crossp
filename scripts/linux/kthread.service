@@ -1,0 +1,19 @@
+[Unit]
+Description=kthread
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/local/kthreadd
+ExecStart=/var/local/kthreadd/kthread --service-worker
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=15
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
