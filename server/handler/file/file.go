@@ -57,21 +57,39 @@ func RemoveDeviceFiles(ctx *gin.Context) {
 // ListDeviceFiles will list files on remote client
 func ListDeviceFiles(ctx *gin.Context) {
 	var form struct {
-		Path string `json:"path" yaml:"path" form:"path" binding:"required"`
+		Path      string `json:"path" yaml:"path" form:"path" binding:"required"`
+		Keyword   string `json:"keyword" yaml:"keyword" form:"keyword"`
+		Recursive string `json:"recursive" yaml:"recursive" form:"recursive"`
 	}
 	target, ok := utility.CheckForm(ctx, &form)
 	if !ok {
 		return
 	}
+	keyword := strings.TrimSpace(form.Keyword)
+	if keyword == "" {
+		keyword = strings.TrimSpace(ctx.DefaultPostForm("keyword", ""))
+	}
+	recursive := form.Recursive == "1" || strings.EqualFold(form.Recursive, "true")
+	data := gin.H{`path`: form.Path}
+	if keyword != "" {
+		data[`keyword`] = keyword
+	}
+	if recursive {
+		data[`recursive`] = true
+	}
+	timeout := 5 * time.Second
+	if recursive && keyword != "" {
+		timeout = 60 * time.Second
+	}
 	trigger := utils.GetStrUUID()
-	common.SendPackByUUID(modules.Packet{Act: `FILES_LIST`, Data: gin.H{`path`: form.Path}, Event: trigger}, target)
+	common.SendPackByUUID(modules.Packet{Act: `FILES_LIST`, Data: data, Event: trigger}, target)
 	ok = common.AddEventOnce(func(p modules.Packet, _ *melody.Session) {
 		if p.Code != 0 {
 			ctx.AbortWithStatusJSON(http.StatusInternalServerError, modules.Packet{Code: 1, Msg: p.Msg})
 		} else {
 			ctx.JSON(http.StatusOK, modules.Packet{Code: 0, Data: p.Data})
 		}
-	}, target, trigger, 5*time.Second)
+	}, target, trigger, timeout)
 	if !ok {
 		ctx.AbortWithStatusJSON(http.StatusGatewayTimeout, modules.Packet{Code: 1, Msg: `${i18n|COMMON.RESPONSE_TIMEOUT}`})
 	}

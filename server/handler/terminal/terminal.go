@@ -207,11 +207,6 @@ func onTerminalMessage(session *melody.Session, data []byte) {
 			return
 		}
 		if input, ok := pack.GetData(`input`, reflect.String); ok {
-			rawInput, _ := hex.DecodeString(input.(string))
-			common.Info(terminal.session, `TERMINAL_INPUT`, ``, ``, map[string]any{
-				`deviceConn`: terminal.deviceConn,
-				`input`:      utils.BytesToString(rawInput),
-			})
 			common.SendPack(modules.Packet{Act: `TERMINAL_INPUT`, Data: gin.H{
 				`input`:    input,
 				`terminal`: terminal.uuid,

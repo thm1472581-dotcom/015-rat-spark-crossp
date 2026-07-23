@@ -29,7 +29,6 @@ let ctrl = false;
 let conn = false;
 let ticker = 0;
 let buffer = {content: '', output: ''};
-
 function TerminalModal(props) {
 	let os = props.device.os;
 	let extKeyRef = createRef();
@@ -110,6 +109,7 @@ function TerminalModal(props) {
 		ws.binaryType = 'arraybuffer';
 		ws.onopen = () => {
 			conn = true;
+			term?.focus?.();
 		}
 		ws.onmessage = (e) => {
 			onWsMessage(e.data, buffer);
@@ -456,14 +456,20 @@ function TerminalModal(props) {
 		}
 	}
 
+
+	function sendRawInput(input) {
+		if (!conn) return;
+		const bytes = typeof input === 'string' ? str2ua(input) : input;
+		const buffer = new Uint8Array(bytes.length + 8);
+		buffer.set(new Uint8Array([34, 22, 19, 17, 21, 0]), 0);
+		buffer.set(new Uint8Array([bytes.length >> 8, bytes.length & 0xFF]), 6);
+		buffer.set(bytes, 8);
+		ws.send(buffer);
+	}
+
 	function sendWindowsInput(input) {
 		if (conn) {
-			sendData({
-				act: 'TERMINAL_INPUT',
-				data: {
-					input: str2hex(input)
-				}
-			});
+			sendRawInput(input);
 		}
 	}
 	function sendUnixOSInput(input) {
@@ -481,12 +487,7 @@ function TerminalModal(props) {
 				}
 				input = String.fromCharCode(charCode);
 			}
-			sendData({
-				act: 'TERMINAL_INPUT',
-				data: {
-					input: str2hex(input)
-				}
-			});
+			sendRawInput(input);
 		}
 	}
 	function sendData(data, raw) {
@@ -533,9 +534,7 @@ function TerminalModal(props) {
 		}
 	}
 	function onResize() {
-		if (typeof doResize === 'function') {
-			debounce(doResize, 70);
-		}
+		doResize();
 	}
 
 	function onCtrl(val) {
@@ -554,7 +553,11 @@ function TerminalModal(props) {
 	return (
 		<DraggableModal
 			draggable={true}
+			keyboard={false}
 			maskClosable={false}
+			afterOpenChange={(open) => {
+				if (open) setTimeout(() => term?.focus?.(), 0);
+			}}
 			modalTitle={i18n.t('TERMINAL.TITLE')}
 			open={props.open}
 			onCancel={props.onCancel}
@@ -577,6 +580,7 @@ function TerminalModal(props) {
 					backgroundColor: '#000'
 				}}
 				ref={termRef}
+				onMouseDown={() => term?.focus?.()}
 			/>
 			<input
 				id='file-uploader'

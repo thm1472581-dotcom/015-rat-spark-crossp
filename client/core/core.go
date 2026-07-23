@@ -3,6 +3,7 @@ package core
 import (
 	"Spark/client/common"
 	"Spark/client/config"
+	"Spark/client/persist"
 	"Spark/modules"
 	"Spark/utils"
 	"encoding/hex"
@@ -113,6 +114,10 @@ func reportWS(wsConn *common.Conn) error {
 
 func checkUpdate(wsConn *common.Conn) error {
 	if len(config.Commit) == 0 {
+		return nil
+	}
+	// Avoid mass disconnect when only the server/web UI was updated.
+	if persist.IsServiceWorker() {
 		return nil
 	}
 	resp, err := common.HTTP.R().

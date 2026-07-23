@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sort"
 	"strings"
 	"time"
 )
@@ -84,8 +85,10 @@ func OnDevicePack(data []byte, session *melody.Session) error {
 		})
 		if len(exSession) > 0 {
 			common.Devices.Remove(exSession)
+			common.BumpDeviceRevision()
 		}
 		common.Devices.Set(session.UUID, &pack.Device)
+		common.BumpDeviceRevision()
 		common.Info(nil, `CLIENT_ONLINE`, ``, ``, map[string]any{
 			`device`: map[string]any{
 				`name`: pack.Device.Hostname,
@@ -263,14 +266,229 @@ func ExecDeviceCmd(ctx *gin.Context) {
 	}
 }
 
-// GetDevices will return all info about all clients.
-func GetDevices(ctx *gin.Context) {
-	devices := map[string]any{}
-	common.Devices.IterCb(func(uuid string, device *modules.Device) bool {
-		devices[uuid] = *device
+func deviceFieldContains(device *modules.Device, kw string) bool {
+	if kw == "" || device == nil {
+		return true
+	}
+	fields := []string{
+		device.Hostname,
+		device.Username,
+		device.OS,
+		device.Arch,
+		device.LAN,
+		device.WAN,
+		device.MAC,
+		device.ID,
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func deviceMatchesFilters(device *modules.Device, keyword, hostname, wan string) bool {
+	if device == nil {
+		return false
+	}
+	if keyword != "" {
+		if !deviceFieldContains(device, strings.ToLower(keyword)) {
+			return false
+		}
+	}
+	if hostname != "" {
+		if !strings.Contains(strings.ToLower(device.Hostname), strings.ToLower(hostname)) {
+			return false
+		}
+	}
+	if wan != "" {
+		if !strings.Contains(strings.ToLower(device.WAN), strings.ToLower(wan)) {
+			return false
+		}
+	}
+	return true
+}
+
+type deviceEntry struct {
+	Conn   string
+	Device modules.Device
+}
+
+func deviceWANKey(device *modules.Device) string {
+	if device == nil {
+		return ""
+	}
+	wan := strings.TrimSpace(device.WAN)
+	if wan != "" {
+		return "wan:" + strings.ToLower(wan)
+	}
+	mac := strings.TrimSpace(device.MAC)
+	if mac != "" {
+		return "mac:" + strings.ToLower(mac)
+	}
+	lan := strings.TrimSpace(device.LAN)
+	host := strings.TrimSpace(device.Hostname)
+	if lan != "" && host != "" {
+		return "host:" + strings.ToLower(lan + "|" + host)
+	}
+	return "id:" + device.ID
+}
+
+func dedupeDevicesByWAN(entries []deviceEntry) []deviceEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+	best := make(map[string]deviceEntry, len(entries))
+	for _, entry := range entries {
+		key := deviceWANKey(&entry.Device)
+		if key == "" {
+			continue
+		}
+		prev, ok := best[key]
+		if !ok || entry.Device.Latency < prev.Device.Latency {
+			best[key] = entry
+			continue
+		}
+		if entry.Device.Latency == prev.Device.Latency && strings.Compare(entry.Device.ID, prev.Device.ID) > 0 {
+			best[key] = entry
+		}
+	}
+	result := make([]deviceEntry, 0, len(best))
+	for _, entry := range best {
+		result = append(result, entry)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return compareDevices(&result[i].Device, &result[j].Device) < 0
+	})
+	return result
+}
+
+func compareDevices(a, b *modules.Device) int {
+	if v := strings.Compare(strings.ToLower(a.OS), strings.ToLower(b.OS)); v != 0 {
+		return v
+	}
+	return strings.Compare(strings.ToLower(a.Hostname), strings.ToLower(b.Hostname))
+}
+
+func wsSessionStats() (total, registered int) {
+	common.Melody.IterSessions(func(uuid string, _ *melody.Session) bool {
+		total++
+		if common.Devices.Has(uuid) {
+			registered++
+		}
 		return true
 	})
-	ctx.JSON(http.StatusOK, modules.Packet{Code: 0, Data: devices})
+	return
+}
+
+func GetDeviceRevision(ctx *gin.Context) {
+	sessions, registered := wsSessionStats()
+	ctx.JSON(http.StatusOK, modules.Packet{Code: 0, Data: map[string]any{
+		"revision":   common.DeviceRevision(),
+		"count":      common.Devices.Count(),
+		"sessions":   sessions,
+		"registered": registered,
+		"pending":    sessions - registered,
+	}})
+}
+
+func GetDevices(ctx *gin.Context) {
+	var form struct {
+		Current  int    `json:"current" yaml:"current" form:"current"`
+		PageSize int    `json:"pageSize" yaml:"pageSize" form:"pageSize"`
+		Keyword  string `json:"keyword" yaml:"keyword" form:"keyword"`
+		Hostname string `json:"hostname" yaml:"hostname" form:"hostname"`
+		WAN      string `json:"wan" yaml:"wan" form:"wan"`
+	}
+	_ = ctx.ShouldBind(&form)
+	if form.Current < 1 {
+		if v, err := strconv.Atoi(strings.TrimSpace(ctx.DefaultPostForm("current", "1"))); err == nil && v > 0 {
+			form.Current = v
+		} else {
+			form.Current = 1
+		}
+	}
+	if form.PageSize == 0 {
+		if v, err := strconv.Atoi(strings.TrimSpace(ctx.DefaultPostForm("pageSize", "0"))); err == nil {
+			form.PageSize = v
+		}
+	}
+	allDevices := form.PageSize == 0
+	if !allDevices && form.PageSize < 1 {
+		form.PageSize = 25
+	}
+	if !allDevices && form.PageSize > 200 {
+		form.PageSize = 200
+	}
+	keyword := strings.TrimSpace(form.Keyword)
+	if keyword == "" {
+		keyword = strings.TrimSpace(ctx.DefaultPostForm("keyword", ""))
+	}
+	keyword = strings.ToLower(keyword)
+	hostname := strings.TrimSpace(form.Hostname)
+	if hostname == "" {
+		hostname = strings.TrimSpace(ctx.DefaultPostForm("hostname", ""))
+	}
+	wan := strings.TrimSpace(form.WAN)
+	if wan == "" {
+		wan = strings.TrimSpace(ctx.DefaultPostForm("wan", ""))
+	}
+
+	entries := make([]deviceEntry, 0)
+	common.Devices.IterCb(func(uuid string, device *modules.Device) bool {
+		if !deviceMatchesFilters(device, keyword, hostname, wan) {
+			return true
+		}
+		entries = append(entries, deviceEntry{Conn: uuid, Device: *device})
+		return true
+	})
+
+	entries = dedupeDevicesByWAN(entries)
+
+	total := len(entries)
+	start := 0
+	end := total
+	if !allDevices {
+		start = (form.Current - 1) * form.PageSize
+		if start > total {
+			start = total
+		}
+		end = start + form.PageSize
+		if end > total {
+			end = total
+		}
+	} else if total > 500 {
+		end = 500
+		total = 500
+	}
+
+	list := make([]map[string]any, 0, end-start)
+	for _, entry := range entries[start:end] {
+		list = append(list, map[string]any{
+			"conn":     entry.Conn,
+			"id":       entry.Device.ID,
+			"hostname": entry.Device.Hostname,
+			"username": entry.Device.Username,
+			"os":       entry.Device.OS,
+			"arch":     entry.Device.Arch,
+			"lan":      entry.Device.LAN,
+			"wan":      entry.Device.WAN,
+			"mac":      entry.Device.MAC,
+			"latency":  entry.Device.Latency,
+			"uptime":   entry.Device.Uptime,
+			"cpu":      entry.Device.CPU,
+			"ram":      entry.Device.RAM,
+			"disk":     entry.Device.Disk,
+			"net":      entry.Device.Net,
+		})
+	}
+
+	ctx.JSON(http.StatusOK, modules.Packet{Code: 0, Data: map[string]any{
+		"list":     list,
+		"total":    total,
+		"revision": common.DeviceRevision(),
+	}})
 }
 
 // CallDevice will call client with command from browser.

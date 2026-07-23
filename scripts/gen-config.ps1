@@ -3,14 +3,17 @@ param(
     [string]$OutPath
 )
 
-$salt = -join ((48..57 + 65..90 + 97..122 | Get-Random -Count 16 | ForEach-Object { [char]$_ }))
+# Fixed project salt. Change only manually in config.json when required.
+$FixedSalt = 'S4ZsOVYnBkX2o5a0'
+
 $cfg = @{
     listen = ':8000'
-    salt   = $salt
+    salt   = $FixedSalt
     auth   = @{ admin = 'ChangeMeChangeMe' }
     log    = @{ level = 'info'; path = './logs'; days = 7 }
+    data   = './data'
 } | ConvertTo-Json -Depth 4
 
 $utf8 = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($OutPath, $cfg, $utf8)
-Write-Output "config.json written: $OutPath"
+Write-Output "config.json written: $OutPath (salt=$FixedSalt)"

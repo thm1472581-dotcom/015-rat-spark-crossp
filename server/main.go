@@ -5,6 +5,7 @@ import (
 	"Spark/server/auth"
 	"Spark/server/common"
 	"Spark/server/config"
+	"Spark/server/devicemeta"
 	"Spark/server/handler"
 	"Spark/server/handler/desktop"
 	"Spark/server/handler/terminal"
@@ -36,6 +37,10 @@ var blocked = cmap.New[int64]()
 var lastRequest = time.Now().Unix()
 
 func main() {
+	if err := devicemeta.Init(config.Config.Data); err != nil {
+		common.Fatal(nil, `DEVICE_META_INIT`, `fail`, err.Error(), nil)
+		return
+	}
 	webFS, err := fs.NewWithNamespace(`web`)
 	if err != nil {
 		common.Fatal(nil, `LOAD_STATIC_RES`, `fail`, err.Error(), nil)
@@ -229,6 +234,7 @@ func wsOnDisconnect(session *melody.Session) {
 		})
 	}
 	common.Devices.Remove(session.UUID)
+	common.BumpDeviceRevision()
 }
 
 func wsHealthCheck(container *melody.Melody) {
@@ -337,7 +343,7 @@ func checkAuth() gin.HandlerFunc {
 			if tokens.Has(token) {
 				lastRequest = now
 				tokens.Set(token, now)
-				passed = true
+				ctx.Next()
 				return
 			}
 		}
@@ -372,6 +378,7 @@ func checkAuth() gin.HandlerFunc {
 			ctx.Header(`Set-Cookie`, fmt.Sprintf(`Authorization=%s; Path=/; HttpOnly`, token))
 		}
 		lastRequest = now
+		ctx.Next()
 	}
 }
 

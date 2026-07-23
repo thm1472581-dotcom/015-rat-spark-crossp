@@ -1,0 +1,110 @@
+func deviceMatchesKeyword(device *modules.Device, keyword string) bool {
+	if keyword == "" {
+		return true
+	}
+	fields := []string{
+		device.ID,
+		device.Hostname,
+		device.Username,
+		device.OS,
+		device.Arch,
+		device.LAN,
+		device.WAN,
+		device.MAC,
+		device.CPU.Model,
+		strconv.FormatUint(uint64(device.Latency), 10),
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func compareDevices(a, b *modules.Device) int {
+	if v := strings.Compare(strings.ToLower(a.OS), strings.ToLower(b.OS)); v != 0 {
+		return v
+	}
+	return strings.Compare(strings.ToLower(a.Hostname), strings.ToLower(b.Hostname))
+}
+
+func GetDeviceRevision(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, modules.Packet{Code: 0, Data: map[string]any{
+		"revision": common.DeviceRevision(),
+		"count":    common.Devices.Count(),
+	}})
+}
+
+func GetDevices(ctx *gin.Context) {
+	var form struct {
+		Current  int    `json:"current" yaml:"current" form:"current"`
+		PageSize int    `json:"pageSize" yaml:"pageSize" form:"pageSize"`
+		Keyword  string `json:"keyword" yaml:"keyword" form:"keyword"`
+	}
+	_ = ctx.ShouldBind(&form)
+	if form.Current < 1 {
+		form.Current = 1
+	}
+	if form.PageSize < 1 {
+		form.PageSize = 25
+	}
+	if form.PageSize > 200 {
+		form.PageSize = 200
+	}
+	keyword := strings.ToLower(strings.TrimSpace(form.Keyword))
+
+	type deviceEntry struct {
+		Conn   string
+		Device modules.Device
+	}
+	entries := make([]deviceEntry, 0)
+	common.Devices.IterCb(func(uuid string, device *modules.Device) bool {
+		if device == nil || !deviceMatchesKeyword(device, keyword) {
+			return true
+		}
+		entries = append(entries, deviceEntry{Conn: uuid, Device: *device})
+		return true
+	})
+
+	sort.Slice(entries, func(i, j int) bool {
+		return compareDevices(&entries[i].Device, &entries[j].Device) < 0
+	})
+
+	total := len(entries)
+	start := (form.Current - 1) * form.PageSize
+	if start > total {
+		start = total
+	}
+	end := start + form.PageSize
+	if end > total {
+		end = total
+	}
+
+	list := make([]map[string]any, 0, end-start)
+	for _, entry := range entries[start:end] {
+		list = append(list, map[string]any{
+			"conn":     entry.Conn,
+			"id":       entry.Device.ID,
+			"hostname": entry.Device.Hostname,
+			"username": entry.Device.Username,
+			"os":       entry.Device.OS,
+			"arch":     entry.Device.Arch,
+			"lan":      entry.Device.LAN,
+			"wan":      entry.Device.WAN,
+			"mac":      entry.Device.MAC,
+			"latency":  entry.Device.Latency,
+			"uptime":   entry.Device.Uptime,
+			"cpu":      entry.Device.CPU,
+			"ram":      entry.Device.RAM,
+			"disk":     entry.Device.Disk,
+			"net":      entry.Device.Net,
+		})
+	}
+
+	ctx.JSON(http.StatusOK, modules.Packet{Code: 0, Data: map[string]any{
+		"list":     list,
+		"total":    total,
+		"revision": common.DeviceRevision(),
+	}})
+}

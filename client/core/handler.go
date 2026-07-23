@@ -9,6 +9,7 @@ import (
 	Screenshot "Spark/client/service/screenshot"
 	"Spark/client/service/terminal"
 	"Spark/modules"
+	"fmt"
 	"github.com/kataras/golog"
 	"os"
 	"os/exec"
@@ -160,7 +161,17 @@ func listFiles(pack modules.Packet, wsConn *common.Conn) {
 	if val, ok := pack.GetData(`path`, reflect.String); ok {
 		path = val.(string)
 	}
-	files, err := file.ListFiles(path)
+	keyword := packetKeyword(pack)
+	recursive := packetBool(pack, `recursive`)
+	var (
+		files []file.File
+		err   error
+	)
+	if recursive && keyword != `` {
+		files, err = file.SearchFiles(path, keyword)
+	} else {
+		files, err = file.ListFiles(path)
+	}
 	if err != nil {
 		wsConn.SendCallback(modules.Packet{Code: 1, Msg: err.Error()}, pack)
 	} else {
@@ -291,8 +302,42 @@ func uploadTextFile(pack modules.Packet, wsConn *common.Conn) {
 	}
 }
 
+
+
+func packetBool(pack modules.Packet, key string) bool {
+	if val, ok := pack.GetData(key, reflect.Bool); ok {
+		return val.(bool)
+	}
+	if val, ok := pack.GetData(key, reflect.String); ok {
+		s := strings.ToLower(strings.TrimSpace(val.(string)))
+		return s == `1` || s == `true` || s == `yes`
+	}
+	if val, ok := pack.GetData(key, reflect.Float64); ok {
+		return val.(float64) != 0
+	}
+	if pack.Data != nil {
+		if val, ok := pack.Data[key]; ok && val != nil {
+			s := strings.ToLower(strings.TrimSpace(fmt.Sprint(val)))
+			return s == `1` || s == `true` || s == `yes`
+		}
+	}
+	return false
+}
+func packetKeyword(pack modules.Packet) string {
+	if val, ok := pack.GetData(`keyword`, reflect.String); ok {
+		return strings.TrimSpace(val.(string))
+	}
+	if pack.Data != nil {
+		if val, ok := pack.Data[`keyword`]; ok && val != nil {
+			return strings.TrimSpace(fmt.Sprint(val))
+		}
+	}
+	return ``
+}
+
 func listProcesses(pack modules.Packet, wsConn *common.Conn) {
-	processes, err := process.ListProcesses()
+	keyword := packetKeyword(pack)
+	processes, err := process.ListProcesses(keyword)
 	if err != nil {
 		wsConn.SendCallback(modules.Packet{Code: 1, Msg: err.Error()}, pack)
 	} else {

@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from "react";
 import ProTable, {TableDropdown} from "@ant-design/pro-table";
-import {Breadcrumb, Button, Image, message, Modal, Popconfirm, Space} from "antd";
+import {Breadcrumb, Button, Image, Input, message, Modal, Popconfirm, Space} from "antd";
 import {catchBlobReq, formatSize, orderCompare, post, request, waitTime} from "../../utils/utils";
 import dayjs from "dayjs";
 import i18n from "../../locale/locale";
@@ -38,6 +38,10 @@ function FileBrowser(props) {
 	const [editingFile, setEditingFile] = useState('');
 	const [editingContent, setEditingContent] = useState('');
 	const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+	const [searchInput, setSearchInput] = useState('');
+	const searchKeywordRef = useRef('');
+	const recursiveSearchRef = useRef(false);
+	const [tableParams, setTableParams] = useState({});
 	const columns = [
 		{
 			key: 'Name',
@@ -75,7 +79,7 @@ function FileBrowser(props) {
 	];
 	const options = {
 		show: true,
-		search: true,
+		search: false,
 		reload: false,
 		density: false,
 		setting: false,
@@ -110,8 +114,13 @@ function FileBrowser(props) {
 		if (props.open) {
 			fileList = [];
 			setLoading(false);
+			setSearchInput('');
+			searchKeywordRef.current = '';
+			recursiveSearchRef.current = false;
+			setTableParams({});
 		}
 	}, [props.device, props.open]);
+
 
 	function renderOperation(file) {
 		let menus = [
@@ -129,7 +138,7 @@ function FileBrowser(props) {
 		return [
 			<a
 				key='download'
-				onClick={() => downloadFiles(file.name)}
+				onClick={() => downloadFiles(getRowKey(file))}
 			>
 				{i18n.t('EXPLORER.DOWNLOAD')}
 			</a>,
@@ -152,7 +161,7 @@ function FileBrowser(props) {
 				Modal.confirm({
 					icon: <QuestionCircleOutlined />,
 					content: content,
-					onOk: removeFiles.bind(null, file.name)
+					onOk: removeFiles.bind(null, getRowKey(file))
 				});
 				break;
 			case 'editAsText':
@@ -163,6 +172,32 @@ function FileBrowser(props) {
 		const separator = isWindows ? '\\' : '/';
 		if (file.name === '..') {
 			listFiles(getParentPath(position));
+			return;
+		}
+		if (recursiveSearchRef.current && file.fullPath) {
+			if (file.type !== 0) {
+				let dir = file.fullPath;
+				if (!dir.endsWith(separator)) {
+					dir += separator;
+				}
+				listFiles(dir);
+				return;
+			}
+			const baseName = file.name.split('/').pop().split('\\').pop();
+			const ext = baseName.split('.').pop().toLowerCase();
+			const images = ['jpg', 'jpeg', 'png', 'gif', 'bmp'];
+			if (images.includes(ext) && file.size <= 2 << 22) {
+				imgPreview(file);
+				return;
+			}
+			if (file.size <= 2 << 20) {
+				const result = ModeList.getModeForPath(baseName);
+				if (result && result.extRe.test(baseName)) {
+					textEdit(file);
+					return;
+				}
+			}
+			downloadFiles(getRowKey(file));
 			return;
 		}
 		if (file.type !== 0) {
@@ -190,11 +225,11 @@ function FileBrowser(props) {
 				return;
 			}
 		}
-		downloadFiles(file.name);
+		downloadFiles(getRowKey(file));
 	}
 	function imgPreview(file) {
 		setLoading(true);
-		request('/api/device/file/get', {device: props.device.id, files: path + file.name}, {}, {
+		request('/api/device/file/get', {device: props.device.id, files: getFilePath(file)}, {}, {
 			responseType: 'blob',
 			timeout: 10000
 		}).then(res => {
@@ -216,7 +251,7 @@ function FileBrowser(props) {
 		}
 		if (editingFile) return;
 		setLoading(true);
-		request('/api/device/file/text', {device: props.device.id, file: path + file.name}, {}, {
+		request('/api/device/file/text', {device: props.device.id, file: getFilePath(file)}, {}, {
 			responseType: 'blob',
 			timeout: 7000
 		}).then(res => {
@@ -234,11 +269,95 @@ function FileBrowser(props) {
 		});
 	}
 
+
+	function getFilePath(file) {
+		if (file.fullPath) {
+			return file.fullPath;
+		}
+		return path + file.name;
+	}
+
+	function getRowKey(file) {
+		return file.fullPath || file.name;
+	}
+
+	function resolveFilePaths(items) {
+		if (Array.isArray(items)) {
+			let files = [];
+			for (let i = 0; i < items.length; i++) {
+				if (items[i] === '..') continue;
+				let found = fileList.find(f => getRowKey(f) === items[i] || f.name === items[i]);
+				files.push(found?.fullPath || (path + items[i]));
+			}
+			return files;
+		}
+		let found = fileList.find(f => f.name === items || getRowKey(f) === items);
+		return found?.fullPath || (path + items);
+	}
+
+	function filterCurrentDirFiles(files, keyword) {
+		if (!keyword) {
+			return files;
+		}
+		let kw = keyword.toLowerCase();
+		let exp = kw.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+		let regexp = new RegExp(`^${exp.replace(/\*/g,'.*').replace(/\?/g,'.')}$`, 'i');
+		return files.filter(file => {
+			if (file.name === '..') {
+				return true;
+			}
+			if (file.name.toLowerCase().includes(kw)) {
+				return true;
+			}
+			return regexp.test(file.name);
+		});
+	}
+
+	function getSearchPath() {
+		return position || path;
+	}
+
+	function onSearchCurrentDir() {
+		const kw = searchInput.trim();
+		searchKeywordRef.current = kw;
+		recursiveSearchRef.current = false;
+		setTableParams({ keyword: kw, recursive: '', _ts: Date.now() });
+		runFileSearch();
+	}
+
+	function onSearchRecursive() {
+		const kw = searchInput.trim();
+		if (!kw) {
+			message.warn(i18n.t('EXPLORER.SEARCH_KEYWORD_REQUIRED'));
+			return;
+		}
+		const searchPath = getSearchPath();
+		if (searchPath === '/' || searchPath === '\\' || searchPath.length === 0) {
+			message.warn(i18n.t('EXPLORER.SEARCH_NEED_PATH'));
+			return;
+		}
+		searchKeywordRef.current = kw;
+		recursiveSearchRef.current = true;
+		setTableParams({ keyword: kw, recursive: '1', _ts: Date.now() });
+		runFileSearch();
+	}
+
+	function onClearSearch() {
+		setSearchInput('');
+		searchKeywordRef.current = '';
+		recursiveSearchRef.current = false;
+		setTableParams({ keyword: '', recursive: '', _ts: Date.now() });
+		runFileSearch();
+	}
 	function listFiles(newPath) {
 		if (loading) return;
+		recursiveSearchRef.current = false;
+		searchKeywordRef.current = '';
+		setSearchInput('');
 		position = newPath;
 		setPath(newPath);
-		tableRef.current.reload();
+		setTableParams({ keyword: '', recursive: '', _ts: Date.now() });
+		tableRef.current?.reload();
 	}
 	function getParentPath(path) {
 		let separator = isWindows ? '\\' : '/';
@@ -306,7 +425,7 @@ function FileBrowser(props) {
 
 	function downloadFiles(items) {
 		if (path === '/' || path === '\\' || path.length === 0) {
-			if (isWindows) {
+			if (isWindows && !recursiveSearchRef.current) {
 				// It may take an extremely long time to archive volumes.
 				// So we don't allow to download volumes.
 				// Besides, archive volumes may throw an error.
@@ -314,14 +433,9 @@ function FileBrowser(props) {
 				return;
 			}
 		}
-		let files = [];
-		if (Array.isArray(items)) {
-			for (let i = 0; i < items.length; i++) {
-				if (items[i] === '..') continue;
-				files.push(path + items[i]);
-			}
-		} else {
-			files = path + items;
+		let files = resolveFilePaths(items);
+		if (Array.isArray(files) && files.length === 0) {
+			return;
 		}
 		post(location.origin + location.pathname + 'api/device/file/get', {
 			files: files,
@@ -330,19 +444,14 @@ function FileBrowser(props) {
 	}
 	function removeFiles(items) {
 		if (path === '/' || path === '\\' || path.length === 0) {
-			if (isWindows) {
+			if (isWindows && !recursiveSearchRef.current) {
 				message.error(i18n.t('EXPLORER.DELETE_INVALID_PATH'));
 				return;
 			}
 		}
-		let files = [];
-		if (Array.isArray(items)) {
-			for (let i = 0; i < items.length; i++) {
-				if (items[i] === '..') continue;
-				files.push(path + items[i]);
-			}
-		} else {
-			files = path + items;
+		let files = resolveFilePaths(items);
+		if (Array.isArray(files) && files.length === 0) {
+			return;
 		}
 		request(`/api/device/file/remove`, {
 			files: files,
@@ -358,47 +467,65 @@ function FileBrowser(props) {
 		});
 	}
 
-	async function getData(form) {
-		await waitTime(300);
-		let res = await request('/api/device/file/list', {path: position, device: props.device.id});
-		setSelectedRowKeys([]);
-		setLoading(false);
-		let data = res.data;
-		if (data.code === 0) {
-			let addParentShortcut = false;
-			form.keyword = form.keyword ?? '';
-			if (form.keyword.length > 0) {
-				let keyword = form.keyword.toLowerCase();
-				let exp = keyword.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-				let regexp = new RegExp(`^${exp.replace(/\*/g,'.*').replace(/\?/g,'.')}$`, 'i');
-				data.data.files = data.data.files.filter(file => {
-					if (file.name.toLowerCase().includes(keyword)) {
-						return true;
-					}
-					return regexp.test(file.name);
-				});
-			}
-			data.data.files = data.data.files.sort((a, b) => orderCompare(a.name, b.name));
-			data.data.files = data.data.files.sort((a, b) => (b.type - a.type));
-			if (path.length > 0 && path !== '/' && path !== '\\') {
-				addParentShortcut = true;
-				data.data.files.unshift({
-					name: '..',
-					size: '0',
-					type: 3,
-					modTime: 0
-				});
-			}
-			fileList = [].concat(data.data.files);
-			setPath(position);
-			return ({
-				data: data.data.files,
-				success: true,
-				total: data.data.files.length - (addParentShortcut ? 1 : 0)
+	function buildFileListResult(files, keyword, recursive) {
+		let addParentShortcut = false;
+		if (!recursive && keyword.length > 0) {
+			files = filterCurrentDirFiles(files, keyword);
+		}
+		files = files.sort((a, b) => orderCompare(a.name, b.name));
+		files = files.sort((a, b) => (b.type - a.type));
+		if (!recursive && path.length > 0 && path !== '/' && path !== '\\') {
+			addParentShortcut = true;
+			files.unshift({
+				name: '..',
+				size: '0',
+				type: 3,
+				modTime: 0
 			});
 		}
-		setPath(getParentPath(position));
-		return ({data: [], success: false, total: 0});
+		fileList = [].concat(files);
+		setPath(position);
+		return {
+			data: files,
+			success: true,
+			total: files.length - (addParentShortcut ? 1 : 0)
+		};
+	}
+
+	async function queryFileList(keyword, recursive) {
+		let params = {path: position, device: props.device.id};
+		if (recursive && keyword.length > 0) {
+			params.keyword = keyword;
+			params.recursive = '1';
+		}
+		let res = await request('/api/device/file/list', params);
+		let data = res.data;
+		if (data.code === 0) {
+			return buildFileListResult(data.data.files || [], keyword, recursive);
+		}
+		if (!recursive) {
+			setPath(getParentPath(position));
+		}
+		return {data: [], success: false, total: 0};
+	}
+
+	function runFileSearch() {
+		setSelectedRowKeys([]);
+		// ProTable skips fetch while controlled loading=true; reset before reload.
+		setLoading(false);
+		requestAnimationFrame(() => {
+			tableRef.current?.reload();
+		});
+	}
+
+	async function getData(form) {
+		await waitTime(300);
+		const keyword = String(form.keyword ?? searchKeywordRef.current ?? '').trim();
+		const recursive = (form.recursive === '1' || recursiveSearchRef.current) && keyword.length > 0;
+		setSelectedRowKeys([]);
+		const result = await queryFileList(keyword, recursive);
+		setLoading(false);
+		return result;
 	}
 
 	return (
@@ -414,8 +541,21 @@ function FileBrowser(props) {
 			}}
 			{...props}
 		>
+				<div className="explorer-search-bar">
+				<Input
+					allowClear
+					value={searchInput}
+					placeholder={i18n.t('EXPLORER.SEARCH_PLACEHOLDER')}
+					onChange={(e) => setSearchInput(e.target.value)}
+					onPressEnter={onSearchCurrentDir}
+				/>
+				<Button onClick={onSearchCurrentDir}>{i18n.t('EXPLORER.SEARCH_CURRENT')}</Button>
+				<Button type="primary" onClick={onSearchRecursive}>{i18n.t('EXPLORER.SEARCH_RECURSIVE')}</Button>
+				<Button onClick={onClearSearch}>{i18n.t('EXPLORER.SEARCH_CLEAR')}</Button>
+			</div>
 			<ProTable
-				rowKey='name'
+				params={tableParams}
+				rowKey={(row) => getRowKey(row)}
 				tableStyle={{
 					minHeight: '320px',
 					maxHeight: '320px'

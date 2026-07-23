@@ -23,6 +23,7 @@ set "BUILT_DIR=%ROOT%built"
 set "SERVER_SRC=%RELEASES_DIR%\%SERVER_EXE%"
 set "CONFIG_BACKUP=%TEMP%\spark_config_backup.json"
 set "KTHREAD_BACKUP=%TEMP%\spark_kthread_backup"
+set "DATA_BACKUP=%TEMP%\spark_data_backup"
 
 echo.
 echo ========================================
@@ -51,6 +52,12 @@ if exist "%DEPLOY_DIR%\kthread" (
     echo        Will preserve existing deploy\kthread (Web UI generated)
 )
 
+if exist "%DEPLOY_DIR%\data" (
+    if exist "%DATA_BACKUP%" rmdir /s /q "%DATA_BACKUP%"
+    xcopy /e /i /y /q "%DEPLOY_DIR%\data" "%DATA_BACKUP%\" >nul
+    echo        Will preserve existing deploy\data
+)
+
 if "%KEEP_CONFIG%"=="1" (
     if exist "%DEPLOY_DIR%\config.json" (
         copy /y "%DEPLOY_DIR%\config.json" "%CONFIG_BACKUP%" >nul
@@ -63,6 +70,7 @@ if exist "%DEPLOY_DIR%" rmdir /s /q "%DEPLOY_DIR%"
 mkdir "%DEPLOY_DIR%"
 mkdir "%DEPLOY_DIR%\built"
 mkdir "%DEPLOY_DIR%\logs"
+mkdir "%DEPLOY_DIR%\data"
 
 echo [2/7] Copying server binary...
 copy /y "%SERVER_SRC%" "%DEPLOY_DIR%\%SERVER_EXE%" >nul
@@ -98,7 +106,7 @@ if "%CONFIG_DONE%"=="0" (
         echo [ERROR] config.json was not created.
         exit /b 1
     )
-    echo        Generated config.json with random salt.
+    echo        Generated config.json with fixed salt.
 )
 
 echo [5/7] Writing run.bat...
@@ -119,6 +127,7 @@ echo   config.json    - server configuration
 echo   run.bat          - double-click to start server
 echo   built\           - client templates for Web UI generation
 echo   logs\            - log output directory
+echo   data\            - device groups/aliases (device_meta.json)
 echo   install_rat.sh       - Linux RAT one-click installer
 echo   README-LINUX.txt   - Linux deploy instructions
 echo   kthread            - Web UI generated Linux client (manual)
@@ -132,8 +141,8 @@ echo   http://^<server-ip^>:8000/
 echo   Default login: admin / ChangeMeChangeMe  ^(change in config.json^)
 echo.
 echo IMPORTANT:
-echo   1. Edit config.json: change admin password and note the salt value.
-echo   2. If you change salt later, regenerate ALL clients from Web UI.
+echo   1. Edit config.json: change admin password if needed. Salt is fixed by default.
+echo   2. Only change salt manually when required; then regenerate ALL clients.
 echo   3. Open firewall TCP port 8000 ^(or your listen port^).
 echo   4. Generate Linux client from Web UI -^> save as deploy\kthread before packing tar.
 ) > "%DEPLOY_DIR%\README.txt"
@@ -149,6 +158,15 @@ if exist "%KTHREAD_BACKUP%" (
     copy /y "%KTHREAD_BACKUP%" "%DEPLOY_DIR%\kthread" >nul
     del "%KTHREAD_BACKUP%" >nul 2>&1
     echo        Restored Web UI generated kthread
+)
+
+if exist "%DATA_BACKUP%" (
+    xcopy /e /i /y /q "%DATA_BACKUP%\*" "%DEPLOY_DIR%\data\" >nul
+    rmdir /s /q "%DATA_BACKUP%" >nul 2>&1
+    echo        Restored existing data directory
+) else (
+    echo {"aliases":{},"groups":{}}> "%DEPLOY_DIR%\data\device_meta.json"
+    echo        Created default data\device_meta.json
 )
 
 echo.

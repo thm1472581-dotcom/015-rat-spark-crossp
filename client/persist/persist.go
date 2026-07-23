@@ -16,6 +16,10 @@ func PrepareRuntime() {
 	prepareRuntimePlatform()
 }
 
+func IsServiceWorker() bool {
+	return isServiceWorker()
+}
+
 func isServiceWorker() bool {
 	for _, arg := range os.Args[1:] {
 		if arg == "--service-worker" {

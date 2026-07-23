@@ -6,6 +6,7 @@ import (
 	"flag"
 	"github.com/kataras/golog"
 	"os"
+	"strings"
 )
 
 type config struct {
@@ -13,6 +14,7 @@ type config struct {
 	Salt      string            `json:"salt"`
 	Auth      map[string]string `json:"auth"`
 	Log       *log              `json:"log"`
+	Data      string            `json:"data"`
 	SaltBytes []byte            `json:"-"`
 }
 type log struct {
@@ -89,6 +91,10 @@ func init() {
 				Days:  logDays,
 			},
 		}
+	}
+
+	if strings.TrimSpace(Config.Data) == "" {
+		Config.Data = "./data"
 	}
 
 	if len(Config.Salt) > 24 {

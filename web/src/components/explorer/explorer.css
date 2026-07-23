@@ -41,3 +41,15 @@ a {
 	user-select: none;
 	cursor: pointer;
 }
+
+.explorer-search-bar {
+	display: flex;
+	gap: 8px;
+	padding: 10px 16px 0;
+	align-items: center;
+}
+
+.explorer-search-bar .ant-input {
+	flex: 1;
+	min-width: 180px;
+}

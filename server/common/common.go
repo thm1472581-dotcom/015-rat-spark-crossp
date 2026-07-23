@@ -1,6 +1,8 @@
 package common
 
 import (
+	"sync/atomic"
+
 	"Spark/modules"
 	"Spark/utils"
 	"Spark/utils/cmap"
@@ -18,6 +20,17 @@ const MaxMessageSize = (2 << 15) + 1024
 
 var Melody = melody.New()
 var Devices = cmap.New[*modules.Device]()
+
+var deviceRevision uint64
+
+func BumpDeviceRevision() {
+	atomic.AddUint64(&deviceRevision, 1)
+}
+
+func DeviceRevision() uint64 {
+	return atomic.LoadUint64(&deviceRevision)
+}
+
 
 func SendPackByUUID(pack modules.Packet, uuid string) bool {
 	session, ok := Melody.GetSessionByUUID(uuid)

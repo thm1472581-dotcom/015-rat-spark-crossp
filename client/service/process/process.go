@@ -1,37 +1,31 @@
 package process
 
-import "github.com/shirou/gopsutil/v3/process"
+import "os"
 
 type Process struct {
-	Name string `json:"name"`
-	Pid  int32  `json:"pid"`
+	Pid         int32  `json:"pid"`
+	Name        string `json:"name"`
+	User        string `json:"user,omitempty"`
+	CPU         string `json:"cpu,omitempty"`
+	Mem         string `json:"mem,omitempty"`
+	VSZ         string `json:"vsz,omitempty"`
+	RSS         string `json:"rss,omitempty"`
+	Stat        string `json:"stat,omitempty"`
+	Session     string `json:"session,omitempty"`
+	MemUsage    string `json:"memUsage,omitempty"`
+	Status      string `json:"status,omitempty"`
+	CPUTime     string `json:"cpuTime,omitempty"`
+	WindowTitle string `json:"windowTitle,omitempty"`
 }
 
-func ListProcesses() ([]Process, error) {
-	result := make([]Process, 0)
-	processes, err := process.Processes()
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < len(processes); i++ {
-		name, err := processes[i].Name()
-		if err != nil {
-			name = `<UNKNOWN>`
-		}
-		result = append(result, Process{Name: name, Pid: processes[i].Pid})
-	}
-	return result, nil
+func ListProcesses(keyword string) ([]Process, error) {
+	return listProcessesPlatform(keyword)
 }
 
 func KillProcess(pid int32) error {
-	processes, err := process.Processes()
+	proc, err := os.FindProcess(int(pid))
 	if err != nil {
 		return err
 	}
-	for i := 0; i < len(processes); i++ {
-		if processes[i].Pid == pid {
-			return processes[i].Kill()
-		}
-	}
-	return nil
+	return proc.Kill()
 }

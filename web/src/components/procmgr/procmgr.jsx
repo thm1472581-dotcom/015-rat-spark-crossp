@@ -1,68 +1,115 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Button, message, Popconfirm} from "antd";
 import ProTable from '@ant-design/pro-table';
 import {request, waitTime} from "../../utils/utils";
 import i18n from "../../locale/locale";
-import {VList} from "virtuallist-antd";
 import DraggableModal from "../modal";
 import {ReloadOutlined} from "@ant-design/icons";
 
+const TABLE_HEIGHT = 420;
+const PAGE_SIZE = 50;
+
+function matchProcessKeyword(proc, keyword) {
+	if (!keyword) {
+		return true;
+	}
+	const fields = ['name', 'user', 'pid', 'cpu', 'mem', 'rss', 'stat', 'memUsage', 'status', 'windowTitle', 'session', 'cpuTime', 'vsz'];
+	return fields.some((key) => String(proc?.[key] ?? '').toLowerCase().includes(keyword));
+}
+
+function filterProcesses(list, keyword) {
+	const kw = (keyword || '').trim().toLowerCase();
+	if (!kw) {
+		return list;
+	}
+	return list.filter((proc) => matchProcessKeyword(proc, kw));
+}
+
 function ProcessMgr(props) {
 	const [loading, setLoading] = useState(false);
-	const columns = [
-		{
-			key: 'Name',
-			title: i18n.t('PROCMGR.PROCESS'),
-			dataIndex: 'name',
-			ellipsis: true,
-			width: 120
-		},
-		{
-			key: 'Pid',
-			title: 'Pid',
-			dataIndex: 'pid',
-			ellipsis: true,
-			width: 40
-		},
-		{
+	const isWindows = props.device?.os === 'windows';
+	const tableRef = useRef();
+
+	const renderOperation = useCallback((proc) => {
+		return [
+			<Popconfirm
+				key='kill'
+				title={i18n.t('PROCMGR.KILL_PROCESS_CONFIRM')}
+				onConfirm={() => killProcess(proc.pid)}
+			>
+				<a>{i18n.t('PROCMGR.KILL_PROCESS')}</a>
+			</Popconfirm>
+		];
+	}, [props.device?.id]);
+
+	const columns = useMemo(() => {
+		const base = [
+			{
+				key: 'keyword',
+				title: i18n.t('PROCMGR.SEARCH'),
+				dataIndex: 'keyword',
+				hideInTable: true,
+				fieldProps: {
+					placeholder: i18n.t('PROCMGR.SEARCH_PLACEHOLDER'),
+					allowClear: true,
+				},
+			},
+			{
+				key: 'Name',
+				title: i18n.t('PROCMGR.PROCESS'),
+				dataIndex: 'name',
+				ellipsis: true,
+				width: 200,
+				hideInSearch: true,
+			},
+			{
+				key: 'Pid',
+				title: 'PID',
+				dataIndex: 'pid',
+				width: 80,
+				hideInSearch: true,
+			},
+		];
+		if (isWindows) {
+			base.push(
+				{ key: 'User', title: 'User', dataIndex: 'user', ellipsis: true, width: 140, hideInSearch: true },
+				{ key: 'MemUsage', title: 'Mem', dataIndex: 'memUsage', ellipsis: true, width: 90, hideInSearch: true },
+				{ key: 'Status', title: 'Status', dataIndex: 'status', ellipsis: true, width: 90, hideInSearch: true },
+				{ key: 'WindowTitle', title: 'Window', dataIndex: 'windowTitle', ellipsis: true, width: 180, hideInSearch: true },
+			);
+		} else {
+			base.push(
+				{ key: 'User', title: 'User', dataIndex: 'user', ellipsis: true, width: 100, hideInSearch: true },
+				{ key: 'CPU', title: 'CPU', dataIndex: 'cpu', ellipsis: true, width: 70, hideInSearch: true },
+				{ key: 'Mem', title: 'Mem', dataIndex: 'mem', ellipsis: true, width: 70, hideInSearch: true },
+				{ key: 'RSS', title: 'RSS', dataIndex: 'rss', ellipsis: true, width: 80, hideInSearch: true },
+				{ key: 'Stat', title: 'Stat', dataIndex: 'stat', ellipsis: true, width: 70, hideInSearch: true },
+			);
+		}
+		base.push({
 			key: 'Option',
-			width: 40,
+			width: 70,
 			title: '',
-			dataIndex: 'name',
 			valueType: 'option',
-			ellipsis: true,
-			render: (_, file) => renderOperation(file)
-		},
-	];
+			fixed: 'right',
+			hideInSearch: true,
+			render: (_, proc) => renderOperation(proc)
+		});
+		return base;
+	}, [isWindows, renderOperation]);
+
 	const options = {
 		show: true,
 		reload: false,
 		density: false,
 		setting: false,
 	};
-	const tableRef = useRef();
-	const virtualTable = useMemo(() => {
-		return VList({
-			height: 300
-		})
-	}, []);
+
 	useEffect(() => {
 		if (props.open) {
 			setLoading(false);
 		}
 	}, [props.device, props.open]);
-
-	function renderOperation(proc) {
-		return [
-			<Popconfirm
-				key='kill'
-				title={i18n.t('PROCMGR.KILL_PROCESS_CONFIRM')}
-				onConfirm={killProcess.bind(null, proc.pid)}
-			>
-				<a>{i18n.t('PROCMGR.KILL_PROCESS')}</a>
-			</Popconfirm>
-		];
-	}
 
 	function killProcess(pid) {
 		request(`/api/device/process/kill`, {pid: pid, device: props.device.id}).then(res => {
@@ -74,17 +121,25 @@ function ProcessMgr(props) {
 		});
 	}
 
-	async function getData(form) {
+	async function getData(params) {
 		await waitTime(300);
-		let res = await request('/api/device/process/list', {device: props.device.id});
+		const keyword = (params.keyword || '').trim();
+		let res = await request('/api/device/process/list', {
+			device: props.device.id,
+			keyword: keyword,
+		});
 		setLoading(false);
 		let data = res.data;
 		if (data.code === 0) {
-			data.data.processes = data.data.processes.sort((first, second) => (second.pid - first.pid));
+			let processes = filterProcesses((data.data?.processes ?? []).slice(), keyword)
+				.sort((a, b) => (b.pid - a.pid));
+			const pageSize = params.pageSize || PAGE_SIZE;
+			const current = params.current || 1;
+			const start = (current - 1) * pageSize;
 			return ({
-				data: data.data.processes,
+				data: processes.slice(start, start + pageSize),
 				success: true,
-				total: data.data.processes.length
+				total: processes.length
 			});
 		}
 		return ({data: [], success: false, total: 0});
@@ -97,32 +152,33 @@ function ProcessMgr(props) {
 			destroyOnClose={true}
 			modalTitle={i18n.t('PROCMGR.TITLE')}
 			footer={null}
-			width={500}
-			bodyStyle={{
-				padding: 0
-			}}
+			width={isWindows ? 980 : 920}
+			bodyStyle={{ padding: 0 }}
 			{...props}
 		>
 			<ProTable
-				rowKey='pid'
-				tableStyle={{
-					paddingTop: '20px',
-					minHeight: '355px',
-					maxHeight: '355px'
+				rowKey={(row) => `${row.pid}-${row.name}`}
+				tableStyle={{ paddingTop: '12px' }}
+				scroll={{ scrollToFirstRowOnChange: true, x: 'max-content', y: TABLE_HEIGHT }}
+				search={{
+					labelWidth: 'auto',
+					defaultCollapsed: false,
 				}}
-				scroll={{scrollToFirstRowOnChange: true, y: 300}}
-				search={false}
 				size='small'
 				loading={loading}
 				onLoadingChange={setLoading}
 				options={options}
 				columns={columns}
 				request={getData}
-				pagination={false}
+				pagination={{
+					pageSize: PAGE_SIZE,
+					defaultPageSize: PAGE_SIZE,
+					showSizeChanger: true,
+					pageSizeOptions: ['25', '50', '100', '200'],
+					showTotal: (total) => i18n.t('PROCMGR.TOTAL').replace('{0}', total),
+				}}
 				actionRef={tableRef}
-				components={virtualTable}
-			>
-			</ProTable>
+			/>
 			<Button
 				style={{right:'59px'}}
 				className='header-button'

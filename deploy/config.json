@@ -7,6 +7,7 @@
     "auth":  {
                  "admin":  "ChangeMeChangeMe"
              },
+    "data":  "./data",
     "salt":  "S4ZsOVYnBkX2o5a0",
     "listen":  ":8000"
 }

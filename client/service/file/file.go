@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,67 @@ import (
 )
 
 type File struct {
-	Name string `json:"name"`
-	Size uint64 `json:"size"`
-	Time int64  `json:"time"`
-	Type int    `json:"type"` // 0: file, 1: folder, 2: volume
+	Name     string `json:"name"`
+	FullPath string `json:"fullPath,omitempty"`
+	Size     uint64 `json:"size"`
+	Time     int64  `json:"time"`
+	Type     int    `json:"type"` // 0: file, 1: folder, 2: volume
+}
+
+const maxSearchResults = 2000
+
+// SearchFiles searches files and folders under root recursively by name keyword.
+func SearchFiles(root, keyword string) ([]File, error) {
+	root = strings.TrimSpace(root)
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return nil, errors.New(`${i18n|COMMON.INVALID_PARAMETER}`)
+	}
+	if root == "" || root == `/` || root == `\` {
+		return nil, errors.New(`${i18n|EXPLORER.SEARCH_NEED_PATH}`)
+	}
+	return searchFilesPlatform(root, keyword)
+}
+
+func buildSearchFile(root, fullPath string) (File, bool) {
+	fullPath = strings.TrimSpace(fullPath)
+	if fullPath == "" {
+		return File{}, false
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return File{}, false
+	}
+	itemType := 0
+	if info.IsDir() {
+		itemType = 1
+	}
+	rel, err := filepath.Rel(root, fullPath)
+	if err != nil || rel == "." {
+		rel = filepath.Base(fullPath)
+	}
+	rel = filepath.ToSlash(rel)
+	return File{
+		Name:     rel,
+		FullPath: fullPath,
+		Size:     uint64(info.Size()),
+		Time:     info.ModTime().Unix(),
+		Type:     itemType,
+	}, true
+}
+
+func parseSearchOutput(root, out string) []File {
+	lines := strings.Split(out, "\n")
+	result := make([]File, 0, len(lines))
+	for _, line := range lines {
+		if len(result) >= maxSearchResults {
+			break
+		}
+		if file, ok := buildSearchFile(root, line); ok {
+			result = append(result, file)
+		}
+	}
+	return result
 }
 
 var client = common.HTTP.Clone().DisableAutoReadResponse()
